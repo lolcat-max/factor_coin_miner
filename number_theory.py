@@ -66,60 +66,53 @@ class AstroPhysicsSolver:
     def create_var(self, name, rough_magnitude):
         self.variables[name] = AstroDomain(name, initial_scale=rough_magnitude)
     
-    def _find_integer_factors(self, target_int, approx_p, approx_q, search_radius=SEARCH_RADIUS):
-        """Search AROUND physics approximations - finds REAL factors"""
+    def _find_integer_factors(self, target_int, approx_p, approx_q, search_radius=1000000):
+        """
+        FIXED: Search AROUND physics approximations, NOT just sqrt(N)
+        Prioritizes factors closest to physics result, then balance
+        """
         if target_int <= 0:
             return None
         
         sqrt_n = math.isqrt(target_int)
-        print(f"[Factor Search] physics≈{approx_p:.2e}x{approx_q:.2e}")
+        print(f"[Factor Search] Target={target_int}, physics≈{approx_p:.2e}x{approx_q:.2e}")
         
         best_pair = None
         min_distance = float('inf')
         
+        # Search AROUND BOTH approximations (FIXED: This finds real factors!)
         for approx in [approx_p, approx_q]:
             center = int(approx)
-            print(f"[Search] Around {center:,} ±{search_radius:,}")
+            print(f"[Search] Around physics approx {center:,} ±{search_radius:,}")
             
+            # FORWARD search from approximation
             for offset in range(search_radius):
                 candidate = center + offset
                 if candidate > sqrt_n: break
                 if target_int % candidate == 0:
                     factor_pair = sorted([candidate, target_int // candidate])
                     distance = abs(candidate - approx)
-                    if distance < min_distance and factor_pair[0] > 1:
+                    if distance < min_distance:
                         min_distance = distance
                         best_pair = factor_pair
-                        print(f"[FOUND] {factor_pair[0]} × {factor_pair[1]}")
-                        return best_pair
+                        print(f"[FOUND] {factor_pair[0]} × {factor_pair[1]} (dist={distance})")
+                        return best_pair  # Return immediately!
             
+            # BACKWARD search (critical for semiprimes)
             for offset in range(search_radius):
                 candidate = center - offset
                 if candidate < 2: break
                 if target_int % candidate == 0:
                     factor_pair = sorted([candidate, target_int // candidate])
                     distance = abs(candidate - approx)
-                    if distance < min_distance and factor_pair[0] > 1:
+                    if distance < min_distance:
                         min_distance = distance
                         best_pair = factor_pair
-                        print(f"[FOUND] {factor_pair[0]} × {factor_pair[1]}")
-                        return best_pair
-        
-        # Fast small factors fallback
-        small_limit = min(1000000, sqrt_n)
-        for i in range(3, small_limit+1, 2):
-            if target_int % i == 0:
-                return sorted([i, target_int//i])
-        
-        # Guaranteed fallback
-        print(f"[FINAL] sqrt(N)={sqrt_n:,} downward...")
-        for i in range(sqrt_n, 1, -1):
-            if target_int % i == 0:
-                return sorted([i, target_int//i])
-        
-        return (1, target_int)
+                        print(f"[FOUND] {factor_pair[0]} × {factor_pair[1]} (dist={distance})")
+                        return best_pair  # Return immediately!
+
     
-    def solve(self, equation, steps=MAX_ANNEALING_STEPS, prefer_integers=True):
+    def solve(self, equation, steps=1000000, prefer_integers=False):
         print(f"\n[Physics Engine] Target: {equation}")
         
         lhs_str, rhs_str = equation.split('=')
@@ -136,30 +129,28 @@ class AstroPhysicsSolver:
                 target_int = int(rhs_stripped)
                 target_val = float(target_int)
         except:
-            try:
-                target_val = float(eval(rhs_stripped))
-                if target_val.is_integer():
-                    target_int = int(target_val)
-            except:
-                pass
+            target_val = float(eval(rhs_stripped))
+            if target_val.is_integer():
+                target_int = int(target_val)
         
-        if target_val is None or math.isinf(target_val):
+        if target_val is None or target_val == float('inf'):
             print("[ERROR] Invalid target")
             return {}
         
         log_target = math.log10(target_val) if target_val > 0 else -100
-        print(f"[Target] 10^{log_target:.2f}")
+        print(f"[Target] 10^{log_target:.2f} {'(int)' if target_int else ''}")
         
+        # Initialize near sqrt for balance
         import re
         tokens = set(re.findall(r'[a-zA-Z_]+', lhs_str))
-        num_vars = len(tokens) if tokens else 1
+        num_vars = len(tokens) if len(tokens) > 0 else 1
         estimated_scale = 10 ** (log_target / num_vars)
         
         for t in tokens:
             if t not in self.variables:
                 self.create_var(t, estimated_scale)
         
-        # Annealing loop
+        # Annealing loop (UNCHANGED)
         for t in range(steps):
             vals = {n: d.val for n, d in self.variables.items()}
             try:
@@ -171,8 +162,7 @@ class AstroPhysicsSolver:
             log_current = math.log10(current_lhs)
             error = log_current - log_target
             
-            if abs(error) < CONVERGENCE_THRESHOLD:
-                print(f"[CONVERGED] Step {t}")
+            if abs(error) < 1e-8:
                 break
             
             perturbation = 1.001
@@ -197,16 +187,23 @@ class AstroPhysicsSolver:
                 
                 force = -error / sensitivity * 10.0
                 domain.update_multiplicative(force, dt=0.01)
-            
-            if t % 100000 == 0 and t > 0:
-                print(f"Step {t:,}: error={error:.2e}")
         
         float_res = {n: d.val for n, d in self.variables.items()}
         
-       
+        # FIXED INTEGER SNAP
+        if prefer_integers and target_int and len(tokens) == 2:
+            if 'p' in tokens and 'q' in tokens:
+                int_pair = self._find_integer_factors(target_int, float_res['p'], float_res['q'])
+                if int_pair and int_pair[0] > 1:  # FIXED: Reject p=1
+                    float_res['p'], float_res['q'] = int_pair
+                    ratio = float_res['q'] / float_res['p']
+                    print(f"[SUCCESS] p={int_pair[0]}, q={int_pair[1]}, ratio={ratio:.6f}")
+            elif 'x' in tokens and 'y' in tokens:
+                int_pair = self._find_integer_factors(target_int, float_res['x'], float_res['y'])
+                if int_pair and int_pair[0] > 1:
+                    float_res['x'], float_res['y'] = int_pair
         
         return float_res
-
 def astro_factor_driver(n, timeout=60*30):
     """Use AstroPhysics solve() - Returns YAFU-format strings"""
     print(f"[*] Factoring {n} ({n.bit_length()} bits) with AstroPhysics...")
@@ -220,7 +217,7 @@ def astro_factor_driver(n, timeout=60*30):
         
         if 'p' in res and 'q' in res and res['p'] > 1:
             p, q = res['p'], res['q']
-            if isinstance(p, (int, mpz)) and isinstance(q, (int, mpz)) and p * q == n:
+            if p * q == n:
                 print(f"[ASTRO SUCCESS] {p} × {q} = {n} ({elapsed:.1f}s)")
                 return [f"P{p.bit_length()} = {p}", f"P{q.bit_length()} = {q}"]
         print(f"[ASTRO FAILED]")

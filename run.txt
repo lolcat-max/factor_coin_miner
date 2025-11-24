@@ -1,0 +1,3 @@
+docker build -t factorn_mining .
+
+docker run -ti   -e SCRIPTPUBKEY="0014d2359ce4da10880edd985ff695944c41f2e66768"   -e RPC_USER="choice"   -e RPC_PASS="choice"   -e ASTRO_MAX_STEPS=50000000   -e ASTRO_SEARCH_RADIUS=20000000   -e YAFU_BIN="NONE"   --network host   factorn_mining   bash -c "apt update && apt install -y pari-gp libpari-dev libmpfr-dev libmpc-dev && pip3 install cypari2 && python3 FACTOR.py"
